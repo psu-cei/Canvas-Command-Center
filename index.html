@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canvas Command Center</title>
+  <meta name="description" content="Summary, step-by-step setup guide, and a read-only Canvas course dashboard based on the Canvas Command Center session (Hermes Agent + Canvas API).">
+  <!-- Security: this page never contains or accepts a Canvas token. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' data: https:; frame-src 'self'; base-uri 'none'; form-action 'none'">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-title">Canvas Command Center</div>
+      <div class="brand-sub">Penn State · Center for eLearning Initiatives</div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+      <button role="tab" data-tab="guide" aria-selected="false">Setup guide</button>
+      <button role="tab" data-tab="dashboard" aria-selected="false">Canvas dashboard</button>
+      <button role="tab" data-tab="hermes" aria-selected="false">Hermes workflows</button>
+      <button role="tab" data-tab="resources" aria-selected="false">Resources</button>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+  </header>
+
+  <main id="main">
+    <!-- ===================== OVERVIEW ===================== -->
+    <section class="panel" id="tab-overview" role="tabpanel">
+      <div class="hero band">
+        <p class="eyebrow">Session summary</p>
+        <h1>Using an AI agent to manage Canvas courses</h1>
+        <p class="lede">The <em>Canvas Command Center</em> approach shows how an instructor can pair
+          <strong>Hermes Agent</strong> (an open-source AI agent that runs on your own computer) with the
+          <strong>Canvas REST API</strong> and <strong>Google Docs</strong> to review, analyze, and update course content,
+          taking the repetitive clicking out of course management.</p>
+      </div>
+
+      <div class="grid-3">
+        <article class="card">
+          <h3>What it is</h3>
+          <p>A local AI agent (Hermes) that can read Canvas course data through the API and propose changes, plus a dashboard to browse courses, modules, pages, assignments, discussions, quizzes, and files.</p>
+        </article>
+        <article class="card">
+          <h3>What you need</h3>
+          <ul class="tight">
+            <li>PowerShell 7</li>
+            <li>Hermes Agent</li>
+            <li>A Canvas Access Token</li>
+            <li>An AI model key (e.g., Google AI Studio)</li>
+            <li>Node.js LTS (for this dashboard's local proxy)</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Key cautions</h3>
+          <ul class="tight">
+            <li>Penn State now issues Canvas tokens only through a Help Desk ticket (since May 20, 2026).</li>
+            <li>Check approval for installing software and for sending course data to an AI model.</li>
+            <li>Keep student records out of AI prompts and reports.</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2>How the pieces fit</h2>
+      <figure class="diagram card">
+        <svg viewBox="0 0 860 260" role="img" aria-labelledby="archTitle archDesc">
+          <title id="archTitle">Architecture</title>
+          <desc id="archDesc">The browser dashboard and Hermes Agent both call a local read-only proxy on 127.0.0.1, which holds the Canvas token and calls the Canvas REST API. Google Docs holds drafts and review reports.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-arrowhead"/></marker>
+          </defs>
+          <g class="d-node"><rect x="20" y="30" width="200" height="74" rx="12"/><text x="120" y="62">Dashboard (browser)</text><text x="120" y="84" class="d-sub">GitHub Pages or 127.0.0.1</text></g>
+          <g class="d-node"><rect x="20" y="156" width="200" height="74" rx="12"/><text x="120" y="188">Hermes Agent</text><text x="120" y="210" class="d-sub">+ AI model (e.g. AI Studio)</text></g>
+          <g class="d-node d-key"><rect x="330" y="92" width="210" height="80" rx="12"/><text x="435" y="124">Local proxy</text><text x="435" y="146" class="d-sub">holds token · GET only</text></g>
+          <g class="d-node"><rect x="640" y="30" width="200" height="74" rx="12"/><text x="740" y="62">Canvas REST API</text><text x="740" y="84" class="d-sub">/api/v1/…</text></g>
+          <g class="d-node d-muted"><rect x="640" y="156" width="200" height="74" rx="12"/><text x="740" y="188">Google Docs</text><text x="740" y="210" class="d-sub">drafts · review reports</text></g>
+          <path class="d-edge" d="M220 67 C 280 67, 280 118, 328 118" marker-end="url(#arrow)"/>
+          <path class="d-edge" d="M220 193 C 280 193, 280 146, 328 146" marker-end="url(#arrow)"/>
+          <path class="d-edge" d="M540 120 C 590 120, 590 67, 638 67" marker-end="url(#arrow)"/>
+          <path class="d-edge d-dashed" d="M220 205 C 420 250, 520 250, 638 200" marker-end="url(#arrow)"/>
+          <text x="600" y="132" class="d-label">+ Bearer token</text>
+          <text x="430" y="252" class="d-label">later phase</text>
+        </svg>
+      </figure>
+
+      <h2>What came up in the session chat</h2>
+      <div class="grid-2">
+        <article class="card">
+          <h3>Audience questions</h3>
+          <dl class="qa">
+            <dt>How large is the class you use this with / how many students?</dt>
+            <dd>Asked by an attendee; the answer was given verbally and isn't in the chat log.</dd>
+            <dt>Did you go through any permissions process (software request, etc.) to set Hermes up?</dt>
+            <dd>The answer isn't in the chat log. Plan for it anyway: check your unit's software-install policy, and note that Canvas tokens now require a Help Desk ticket at Penn State.</dd>
+            <dt>"You are going to need to start from step 1."</dt>
+            <dd>A popular request. That's why the <a href="#guide" data-tab-link="guide">setup guide</a> starts at zero.</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <h3>Links shared</h3>
+          <ul class="linklist" id="sessionLinks"></ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===================== GUIDE ===================== -->
+    <section class="panel" id="tab-guide" role="tabpanel" hidden>
+      <div class="guide-head band">
+        <div>
+          <p class="eyebrow">Step by step</p>
+          <h1>Setup guide</h1>
+          <p class="lede">Work top to bottom, and confirm each step before moving on. Your checkmarks are saved in this browser only.</p>
+        </div>
+        <div class="progress-card card">
+          <div class="progress-label"><span id="progressText">0 of 0 steps</span><button class="linkish" id="resetProgress" type="button">Reset</button></div>
+          <div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+        </div>
+      </div>
+      <div class="os-switch" role="radiogroup" aria-label="Operating system for commands">
+        <span>Show commands for:</span>
+        <label><input type="radio" name="os" value="windows" checked> Windows</label>
+        <label><input type="radio" name="os" value="mac"> macOS</label>
+      </div>
+      <div class="guide-layout">
+        <aside class="guide-toc" id="guideToc" aria-label="Guide phases"></aside>
+        <div id="guideSteps"></div>
+      </div>
+    </section>
+
+    <!-- ===================== DASHBOARD ===================== -->
+    <section class="panel" id="tab-dashboard" role="tabpanel" hidden>
+      <div class="band">
+        <p class="eyebrow">Browse and review</p>
+        <h1>Canvas dashboard</h1>
+        <p class="lede">Connect to the local proxy, or load demo data, to browse courses, modules, pages, assignments, discussions, quizzes, and files.</p>
+      </div>
+      <div class="dash-bar card">
+        <div class="conn">
+          <label for="proxyUrl">Local proxy</label>
+          <input id="proxyUrl" type="url" spellcheck="false" autocomplete="off" value="http://127.0.0.1:8787">
+          <button class="btn" id="connectBtn" type="button">Connect</button>
+          <button class="btn btn-ghost" id="demoBtn" type="button">Use demo data</button>
+        </div>
+        <div class="status" id="connStatus" role="status" aria-live="polite">Not connected</div>
+      </div>
+      <p class="hint">The dashboard never asks for your token. It talks to the proxy you run on your own computer (see guide step “Start the local proxy”). <span class="badge badge-read">READ ONLY</span> Nothing on this tab changes Canvas.</p>
+
+      <div class="dash">
+        <aside class="course-list card">
+          <div class="course-tools">
+            <input id="courseSearch" type="search" placeholder="Search courses…" aria-label="Search courses">
+            <select id="courseFilter" aria-label="Filter courses">
+              <option value="all">All states</option>
+              <option value="available">Published</option>
+              <option value="unpublished">Unpublished</option>
+            </select>
+          </div>
+          <ul id="courses" class="courses" aria-label="Courses"><li class="empty">Connect or load demo data to see courses.</li></ul>
+        </aside>
+
+        <section class="course-detail card" aria-live="polite">
+          <div id="courseHeader" class="course-header"><p class="empty">Select a course.</p></div>
+          <nav class="subtabs" id="subtabs" role="tablist" aria-label="Course content" hidden>
+            <button data-view="modules" aria-selected="true">Modules</button>
+            <button data-view="pages" aria-selected="false">Pages</button>
+            <button data-view="assignments" aria-selected="false">Assignments</button>
+            <button data-view="discussions" aria-selected="false">Discussions</button>
+            <button data-view="quizzes" aria-selected="false">Quizzes</button>
+            <button data-view="files" aria-selected="false">Files</button>
+            <button data-view="review" aria-selected="false">Quick review</button>
+          </nav>
+          <div id="viewBody" class="view-body"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ===================== HERMES ===================== -->
+    <section class="panel" id="tab-hermes" role="tabpanel" hidden>
+      <div class="band">
+        <p class="eyebrow">Agent layer</p>
+        <h1>Hermes workflows</h1>
+        <p class="lede">Hermes is kept separate from the Canvas API layer. It reads Canvas through the same read-only proxy, so API calls can be tested on their own and the agent can't change a course by accident.</p>
+      </div>
+      <div class="grid-2" id="hermesCards"></div>
+      <h2>Prompts to try</h2>
+      <div id="promptList" class="prompt-list"></div>
+    </section>
+
+    <!-- ===================== RESOURCES ===================== -->
+    <section class="panel" id="tab-resources" role="tabpanel" hidden>
+      <div class="band">
+        <p class="eyebrow">Reference</p>
+        <h1>Resources</h1>
+        <p class="lede">Canvas API endpoints this site uses, documentation links, and what's planned next.</p>
+      </div>
+      <div class="grid-2">
+        <article class="card"><h3>Canvas API endpoints used</h3><div class="table-wrap"><table class="endpoints" id="endpointTable"></table></div></article>
+        <article class="card"><h3>Documentation</h3><ul class="linklist" id="docLinks"></ul></article>
+      </div>
+      <h2>Roadmap (not built yet)</h2>
+      <ol class="roadmap" id="roadmap"></ol>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="foot-wrap">
+      <nav class="foot-links" aria-label="Penn State links">
+        <a href="https://www.psu.edu/">The Pennsylvania State University</a>
+        <a href="https://www.psu.edu/web-privacy-statement">Privacy Statements</a>
+        <a href="https://www.psu.edu/accessibilitystatement">Accessibility</a>
+        <a href="https://www.psu.edu/legal-statements">Legal Statements</a>
+      </nav>
+      <span>The Pennsylvania State University © 2026</span>
+    </div>
+    <p class="foot-note">Not an Instructure resource. The demo course data is fictional.</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="assets/js/guide-data.js"></script>
+  <script src="assets/js/demo-data.js"></script>
+  <script src="assets/js/canvas-client.js"></script>
+  <script src="assets/js/dashboard.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

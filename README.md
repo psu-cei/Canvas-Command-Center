@@ -156,7 +156,3 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ## License
 
 License not yet chosen. See the project owner. Until a license is added, all rights are reserved.
-
----
-
-Not an Instructure resource. The demo course data is fictional.

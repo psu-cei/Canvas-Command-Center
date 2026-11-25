@@ -40,7 +40,17 @@ window.CCC_DEMO = (() => {
       { id: courseId + 1, display_name: 'syllabus-demo.pdf', size: 248311, 'content-type': 'application/pdf', updated_at: '2026-08-18T12:00:00Z', locked: false },
       { id: courseId + 2, display_name: 'week1-slides-demo.pptx', size: 3411200, 'content-type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', updated_at: '2026-08-25T12:00:00Z', locked: false },
     ];
-    return { modules, pages, assignments, discussions, quizzes, files };
+    const announcements = [
+      { id: courseId + 8001, title: 'Welcome — start here', message: '<p>Fictional welcome announcement for the demo course.</p>', posted_at: '2026-08-24T13:00:00Z', published: true, is_announcement: true },
+      { id: courseId + 8002, title: 'Week 2 reading has changed', message: '<p>Fictional update about a reading change.</p>', posted_at: '2026-09-02T13:00:00Z', published: true, is_announcement: true },
+    ];
+    // Shaped like a Course object, because that is what Canvas returns for the syllabus.
+    const syllabus = {
+      id: courseId,
+      name: courses.find((c) => c.id === courseId)?.name,
+      syllabus_body: courseId === 900003 ? '' : '<h2>Course syllabus</h2><p>Fictional syllabus text for the demo course.</p><ul><li>Attendance: fictional policy.</li><li>Late work: fictional policy.</li></ul>',
+    };
+    return { modules, pages, assignments, announcements, discussions, quizzes, files, syllabus };
   };
 
   const byCourse = Object.fromEntries(courses.map((c) => [c.id, mk(c.id)]));

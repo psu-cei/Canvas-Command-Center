@@ -136,8 +136,10 @@
     const c = state.client;
     const run = {
       modules: () => cached('modules', () => c.modules(id)).then(renderModules),
+      syllabus: () => cached('syllabus', () => c.syllabus(id)).then(renderSyllabus),
       pages: () => cached('pages', () => c.pages(id)).then(renderPages),
       assignments: () => cached('assignments', () => c.assignments(id)).then(renderAssignments),
+      announcements: () => cached('announcements', () => c.announcements(id)).then(renderAnnouncements),
       discussions: () => cached('discussions', () => c.discussions(id)).then(renderDiscussions),
       quizzes: () => cached('quizzes', () => c.quizzes(id)).then(renderQuizzes),
       files: () => cached('files', () => c.files(id)).then(renderFiles),
@@ -153,7 +155,16 @@
 
   function renderModules(mods) {
     if (!mods.length) return guard('modules', '<p class="empty">This course has no modules.</p>');
-    guard('modules', `<div class="modules">${mods.map((m) => `
+    guard('modules', `
+      <div class="review-head">
+        <p><strong>${mods.length}</strong> module${mods.length === 1 ? '' : 's'}. <span class="badge badge-read">READ ONLY</span> Export gathers every page, assignment and discussion in module order.</p>
+        <span class="export-actions">
+          <button type="button" class="btn btn-small" data-export-content="docx">Export for Google Docs (.docx)</button>
+          <button type="button" class="btn btn-small" data-export-content="md">Markdown (.md)</button>
+        </span>
+      </div>
+      <p class="hint small">Upload the .docx to Google Drive and open it — Drive converts it to a Google Doc. Embedded media is marked in place, not reproduced.</p>
+      <div class="modules">${mods.map((m) => `
       <details class="module" open>
         <summary><span class="module-name">${linkTo(courseUrl(`/modules#context_module_${m.id}`), m.name, 'Open this module in Canvas')}</span> ${pill(m.published !== false)} <span class="count">${m.items_count ?? m.items?.length ?? 0} items</span></summary>
         ${m.items ? `<ul class="items">${m.items.map((it) => `
@@ -206,6 +217,30 @@
     guard('assignments', table(['Assignment', 'Due', 'Points', 'Status'], list.map((a) => `
       <tr><td>${canvasEditLink(a.html_url, a.name)}</td><td>${a.due_at ? fmtDate(a.due_at) : '<span class="pill pill-warn">No due date</span>'}</td>
       <td>${a.points_possible ?? '—'}</td><td>${pill(a.published)}</td></tr>`), 'No assignments.'));
+  }
+
+  // Canvas has no separate editor URL for the syllabus: the Syllabus page edits inline.
+  function renderSyllabus(course) {
+    const body = course && course.syllabus_body;
+    const link = courseUrl('/assignments/syllabus');
+    guard('syllabus', `
+      <div class="page-preview">
+        <div class="page-preview-head"><h3>Syllabus</h3><span class="badge badge-read">READ ONLY preview</span>
+        ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Edit in Canvas</a>` : ''}</div>
+        ${body
+          ? '<iframe title="Syllabus preview" sandbox="" referrerpolicy="no-referrer"></iframe><p class="hint small">Scripts are disabled in the preview. The link opens the Syllabus page, where Edit is inline.</p>'
+          : '<p class="empty">This course has no syllabus content.</p>'}
+      </div>`);
+    if (!body || state.view !== 'syllabus') return;
+    // sandbox="" blocks scripts, forms, and navigation in the Canvas HTML.
+    const frame = $('#viewBody iframe');
+    if (frame) frame.srcdoc = `<!doctype html><meta charset="utf-8"><style>body{font:16px/1.5 system-ui,sans-serif;margin:16px;color:#1f2933}img{max-width:100%}</style>${body}`;
+  }
+
+  function renderAnnouncements(list) {
+    guard('announcements', table(['Announcement', 'Posted', 'Status'], list.map((a) => `
+      <tr><td>${canvasEditLink(a.html_url, a.title)}</td><td>${fmtDate(a.posted_at || a.created_at)}</td><td>${pill(a.published)}</td></tr>`),
+    'No announcements.') + '<p class="hint small">Announcements come from the discussion_topics endpoint with only_announcements=true.</p>');
   }
 
   function renderDiscussions(list) {
@@ -270,6 +305,103 @@
     state.lastReview = findings;
   }
 
+  function download(filename, payload) {
+    const blob = payload instanceof Blob ? payload : new Blob([payload], { type: 'text/markdown' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: filename });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ---------------- Module content export (READ ONLY) ----------------
+  // Walks modules in order, pulls each item's body, and writes one Markdown
+  // document an instructor can review without a Canvas account.
+  async function exportModuleContent(btn, format) {
+    const c = state.client;
+    const course = state.selected;
+    const base = state.canvasBase;
+    const label = btn.textContent;
+    btn.disabled = true;
+    try {
+      btn.textContent = 'Loading…';
+      // A disabled tool shouldn't sink the whole export.
+      const settle = (p) => p.then((v) => v, () => []);
+      const [mods, asg, disc, quiz] = await Promise.all([
+        cached('modules', () => c.modules(course.id)),
+        settle(cached('assignments', () => c.assignments(course.id))),
+        settle(cached('discussions', () => c.discussions(course.id))),
+        settle(cached('quizzes', () => c.quizzes(course.id))),
+      ]);
+      const index = (list) => new Map((list || []).map((x) => [x.id, x]));
+      const A = index(asg), D = index(disc), Q = index(quiz);
+
+      // Canvas omits `items` from very large modules; fetch those separately.
+      const full = [];
+      for (const m of mods) {
+        full.push({ ...m, items: m.items || await c.moduleItems(course.id, m.id) || [] });
+      }
+
+      const md = (html) => window.CCC_Export.htmlToMarkdown(html, base);
+      const total = full.reduce((t, m) => t + m.items.length, 0);
+      const stamp = new Date().toLocaleString();
+      const out = [
+        `# ${course.name} — module content`, '',
+        `Exported ${stamp} by Canvas Command Center. READ ONLY: nothing in Canvas was changed.`, '',
+        `Canvas course ID ${course.id} · ${course.term?.name || 'no term'} · ${full.length} module(s), ${total} item(s)`, '',
+        '> Embedded media — Canvas-hosted images, Kaltura video, H5P and other iframes —',
+        '> cannot be reproduced in a document. Each one is marked in place below.', '',
+        '## Contents', '',
+        ...full.map((m, i) => `${i + 1}. ${m.name}${m.published === false ? ' (unpublished)' : ''}`),
+        '', '---', '',
+      ];
+
+      let done = 0;
+      for (const m of full) {
+        out.push(`## ${m.name}${m.published === false ? '  — _unpublished_' : ''}`, '');
+        if (!m.items.length) out.push('_(no items)_', '');
+        for (const it of m.items) {
+          btn.textContent = `Exporting ${++done}/${total}…`;
+          const state_ = it.published === false ? '  — _unpublished_' : '';
+          if (it.type === 'SubHeader') { out.push(`### ${it.title}${state_}`, ''); continue; }
+          out.push(`### ${it.title}  \`${it.type}\`${state_}`, '');
+          try {
+            if (it.type === 'Page' && it.page_url) {
+              out.push(md((await c.page(course.id, it.page_url)).body), '');
+            } else if (it.type === 'Assignment') {
+              const a = A.get(it.content_id);
+              if (a?.due_at) out.push(`**Due:** ${fmtDate(a.due_at)}`, '');
+              if (a?.points_possible != null) out.push(`**Points:** ${a.points_possible}`, '');
+              out.push(md(a?.description), '');
+            } else if (it.type === 'Discussion') {
+              out.push(md(D.get(it.content_id)?.message), '');
+            } else if (it.type === 'Quiz') {
+              out.push(md(Q.get(it.content_id)?.description), '');
+              out.push('> Quiz questions are not exported.', '');
+            } else if (it.type === 'ExternalUrl') {
+              out.push(`External link: ${it.external_url || '(no URL)'}`, '');
+            } else {
+              out.push(`> **[${it.type} — not exportable as text]**`, '');
+            }
+          } catch (err) {
+            // One unreadable item shouldn't lose the whole export.
+            out.push(`> **[Could not read this item: ${err.message}]**`, '');
+          }
+        }
+      }
+      const markdown = out.join('\n');
+      if (format === 'docx') {
+        // The .docx renders from this same Markdown, so the two downloads cannot drift.
+        download(`course-content_${course.id}_v1.docx`, window.CCC_Docx.fromMarkdown(markdown));
+      } else {
+        download(`course-content_${course.id}_v1.md`, markdown);
+      }
+    } catch (err) {
+      $('#viewBody').insertAdjacentHTML('afterbegin', errorBox(err));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   function exportReview() {
     const c = state.selected;
     // Pipes break table cells; square brackets break [text](url).
@@ -282,10 +414,7 @@
       '| Area | Issue | Item |', '|---|---|---|',
       ...state.lastReview.map((f) => `| ${f.area} | ${md(f.issue)} | ${f.url ? `[${md(f.item)}](${f.url})` : md(f.item)} |`),
     ];
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `course-review_${c.id}_v1.md` });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    download(`course-review_${c.id}_v1.md`, lines.join('\n'));
   }
 
   async function loadModuleItems(moduleId, btn) {
@@ -328,6 +457,7 @@
       if (t.closest('[data-open-page]')) openPage(t.closest('[data-open-page]').dataset.openPage);
       else if (t.closest('[data-close-preview]')) document.getElementById('pagePreview').innerHTML = '';
       else if (t.closest('[data-export-review]')) exportReview();
+      else if (t.closest('[data-export-content]')) { const b = t.closest('[data-export-content]'); exportModuleContent(b, b.dataset.exportContent); }
       else if (t.closest('[data-load-items]')) loadModuleItems(t.closest('[data-load-items]').dataset.loadItems, t.closest('[data-load-items]'));
     });
   }

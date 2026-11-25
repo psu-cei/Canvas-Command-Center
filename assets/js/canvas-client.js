@@ -52,6 +52,10 @@
     // Canvas omits `items` from include[]=items when a module is very large; fetch them separately.
     moduleItems(id, moduleId) { return this.get(`/api/v1/courses/${id}/modules/${moduleId}/items`, { per_page: 100 }, true); }
     pages(id) { return this.get(`/api/v1/courses/${id}/pages`, { per_page: 100, sort: 'title' }, true); }
+    // The syllabus is a field on the Course object, not a resource of its own.
+    syllabus(id) { return this.get(`/api/v1/courses/${id}`, { 'include[]': ['syllabus_body', 'term'] }); }
+    // Announcements are discussion topics; only_announcements=true is what separates them.
+    announcements(id) { return this.get(`/api/v1/courses/${id}/discussion_topics`, { only_announcements: true, per_page: 100 }, true); }
     page(id, url) { return this.get(`/api/v1/courses/${id}/pages/${encodeURIComponent(url)}`); }
     assignments(id) { return this.get(`/api/v1/courses/${id}/assignments`, { per_page: 100, order_by: 'due_at' }, true); }
     discussions(id) { return this.get(`/api/v1/courses/${id}/discussion_topics`, { per_page: 100 }, true); }
@@ -81,6 +85,8 @@
     }
     assignments(id) { return this._(this._c(id).assignments); }
     discussions(id) { return this._(this._c(id).discussions); }
+    syllabus(id) { return this._(this._c(id).syllabus); }
+    announcements(id) { return this._(this._c(id).announcements); }
     quizzes(id) { return this._(this._c(id).quizzes); }
     files(id) { return this._(this._c(id).files); }
   }

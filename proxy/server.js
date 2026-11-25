@@ -8,9 +8,14 @@
  *   server on your own computer, and this server adds the token when it calls
  *   Canvas. The token never leaves your machine except in requests to Canvas.
  *
- * SAFETY MODEL (v1)
- *   - READ ONLY: only HTTP GET is forwarded, and only to an allowlist of
- *     Canvas API paths (see ALLOWED_PATHS). Nothing here MODIFIES CANVAS.
+ * SAFETY MODEL (v2)
+ *   - READ ONLY: only HTTP GET is forwarded. Nothing here MODIFIES CANVAS.
+ *   - Two read routes exist: the Canvas API allowlist (ALLOWED_PATHS), and
+ *     /download/:course_id/:file_id, which streams one course file's bytes.
+ *   - The download route serves file CONTENT, not just metadata. It is reachable
+ *     from whatever ALLOWED_ORIGINS permits, so adding a public origin there
+ *     lets any page on that origin pull this user's Canvas files. Keep
+ *     ALLOWED_ORIGINS empty (same-origin only) unless you need otherwise.
  *   - Binds to 127.0.0.1 only, so other computers on your network can't reach it.
  *   - CORS is limited to the origins you list in ALLOWED_ORIGINS.
  *
@@ -41,6 +46,8 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .map((s) => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // pagination safety cap
+// Refuse very large files rather than buffering them in memory. Raise if needed.
+const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 100 * 1024 * 1024);
 
 // The static dashboard lives one folder up (the repository root).
 const SITE_ROOT = path.resolve(__dirname, '..');
@@ -102,7 +109,7 @@ const server = http.createServer(async (req, res) => {
 
   // Health check used by the dashboard's "Test connection" button.
   if (url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, mode: 'read-only', canvas: CANVAS_BASE_URL });
+    return sendJson(res, 200, { ok: true, mode: 'read-only', canvas: CANVAS_BASE_URL, downloads: true });
   }
 
   if (url.pathname.startsWith('/api/v1/')) {
@@ -113,6 +120,17 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 405, { error: 'This proxy is READ ONLY. Only GET is allowed.' });
     }
     return proxyCanvas(url, res);
+  }
+
+  // File download: streams ONE course file's bytes. READ ONLY.
+  if (url.pathname.startsWith('/download/')) {
+    if (origin && !isAllowedOrigin(origin)) {
+      return sendJson(res, 403, { error: `Origin ${origin} is not in ALLOWED_ORIGINS.` });
+    }
+    if (req.method !== 'GET') {
+      return sendJson(res, 405, { error: 'This proxy is READ ONLY. Only GET is allowed.' });
+    }
+    return proxyDownload(url, res);
   }
 
   // Anything else: serve the static dashboard (so http://127.0.0.1:8787 works
@@ -126,6 +144,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  Dashboard : http://${HOST}:${PORT}/`);
   console.log(`  Canvas    : ${CANVAS_BASE_URL}`);
   console.log(`  Origins   : ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(', ') : '(same-origin only)'}`);
+  console.log(`  Downloads : /download/:course_id/:file_id  (cap ${Math.round(MAX_DOWNLOAD_BYTES / 1048576)} MB)`);
   console.log('  Stop with Ctrl+C');
   console.log('');
 });
@@ -183,6 +202,52 @@ async function proxyCanvas(url, res) {
       }
     }
     return sendJson(res, 200, collected);
+  } catch (err) {
+    return sendJson(res, 502, { error: 'Could not reach Canvas', detail: String(err.message || err) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4b. File downloads
+// ---------------------------------------------------------------------------
+async function proxyDownload(url, res) {
+  const m = /^\/download\/(\d+)\/(\d+)$/.exec(url.pathname);
+  if (!m) return sendJson(res, 400, { error: 'Expected /download/:course_id/:file_id' });
+  const [, courseId, fileId] = m;
+
+  try {
+    // Look the file up THROUGH its course, so a bare file id can't reach a file
+    // in some other course the token happens to have access to.
+    const metaRes = await fetch(`${CANVAS_BASE_URL}/api/v1/courses/${courseId}/files/${fileId}`, {
+      headers: { Authorization: `Bearer ${CANVAS_TOKEN}`, Accept: 'application/json' },
+    });
+    if (!metaRes.ok) {
+      return sendJson(res, metaRes.status, {
+        error: 'Canvas returned an error', status: metaRes.status, hint: hintFor(metaRes.status),
+      });
+    }
+    const file = await metaRes.json();
+    const size = Number(file.size || 0);
+    if (size > MAX_DOWNLOAD_BYTES) {
+      return sendJson(res, 413, {
+        error: `That file is ${size} bytes; the cap is ${MAX_DOWNLOAD_BYTES}.`,
+        hint: 'Raise MAX_DOWNLOAD_BYTES in proxy/.env to allow it.',
+      });
+    }
+
+    // file.url carries a short-lived verifier token. It is used HERE and is
+    // never sent to the browser.
+    const binRes = await fetch(file.url);
+    if (!binRes.ok) {
+      return sendJson(res, binRes.status, { error: 'Could not fetch the file body from Canvas.' });
+    }
+    const buf = Buffer.from(await binRes.arrayBuffer());
+    res.writeHead(200, {
+      'Content-Type': file['content-type'] || 'application/octet-stream',
+      'Content-Length': buf.length,
+      'Cache-Control': 'no-store',
+    });
+    return res.end(buf);
   } catch (err) {
     return sendJson(res, 502, { error: 'Could not reach Canvas', detail: String(err.message || err) });
   }

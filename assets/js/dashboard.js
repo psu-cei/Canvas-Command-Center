@@ -32,7 +32,7 @@
     (url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(label)} (opens in a new tab)">${txt(text)}</a>` : txt(text));
   const canvasEditLink = (htmlUrl, text) => linkTo(canvasEditUrl(htmlUrl), text, 'Edit in Canvas');
 
-  const state = { client: null, courses: [], selected: null, view: 'modules', cache: {}, canvasBase: null };
+  const state = { client: null, courses: [], selected: null, view: 'modules', cache: {}, canvasBase: null, files: [], picked: new Set() };
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -57,6 +57,7 @@
     state.cache = {};
     state.selected = null;
     state.canvasBase = null;
+    state.canDownload = false;
     $('#subtabs').hidden = true;
     $('#courseHeader').innerHTML = '<p class="empty">Select a course.</p>';
     $('#viewBody').innerHTML = '';
@@ -65,6 +66,10 @@
       const health = await client.health();
       // The proxy reports the Canvas host; demo mode doesn't, so links stay off there.
       state.canvasBase = canvasUrl(health?.canvas);
+      // A proxy started before the download route existed answers /download with
+      // the static 404. Detect that here rather than letting it look like a
+      // Canvas error later.
+      state.canDownload = health?.downloads === true;
       const me = await client.self();
       setStatus(`${client.mode === 'demo' ? 'Demo data' : 'Connected'} · ${me.name}`, client.mode === 'demo' ? 'demo' : 'ok');
       await loadCourses();
@@ -153,18 +158,47 @@
     ? `<div class="table-wrap"><table class="data"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`
     : `<p class="empty">${empty}</p>`;
 
-  function renderModules(mods) {
-    if (!mods.length) return guard('modules', '<p class="empty">This course has no modules.</p>');
-    guard('modules', `
-      <div class="review-head">
-        <p><strong>${mods.length}</strong> module${mods.length === 1 ? '' : 's'}. <span class="badge badge-read">READ ONLY</span> Export gathers every page, assignment and discussion in module order.</p>
-        <span class="export-actions">
-          <button type="button" class="btn btn-small" data-export-content="docx">Export for Google Docs (.docx)</button>
-          <button type="button" class="btn btn-small" data-export-content="md">Markdown (.md)</button>
-        </span>
+  // ---------------- Filtered list views ----------------
+  // One shape everywhere: search on the left, optional select, buttons pushed
+  // right. Each view supplies only how to match an item and how to draw rows.
+  const lists = {};
+
+  const STATUS_SELECT = {
+    label: 'Filter by status',
+    options: [{ value: '', label: 'All statuses' },
+      { value: 'published', label: 'Published' }, { value: 'unpublished', label: 'Unpublished' }],
+  };
+  const matchStatus = (isPublished, sel) => !sel || (sel === 'published' ? !!isPublished : !isPublished);
+  const has = (value, q) => !q || plain(value).toLowerCase().includes(q);
+
+  function listView(view, items, opts) {
+    lists[view] = { items: items || [], opts };
+    const sel = opts.select;
+    guard(view, `
+      <div class="filter-bar">
+        <input type="search" data-list-filter placeholder="${esc(opts.placeholder)}" aria-label="${esc(opts.placeholder)}">
+        ${sel ? `<select data-list-filter aria-label="${esc(sel.label)}">${
+          sel.options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select>` : ''}
+        ${opts.actions ? `<span class="bar-actions">${opts.actions}</span>` : ''}
       </div>
-      <p class="hint small">Upload the .docx to Google Drive and open it — Drive converts it to a Google Doc. Embedded media is marked in place, not reproduced.</p>
-      <div class="modules">${mods.map((m) => `
+      ${opts.note || ''}
+      <div class="list-body"></div>
+      ${opts.after || ''}`);
+    renderListRows(view);
+  }
+
+  function renderListRows(view) {
+    const entry = lists[view];
+    const box = $('.list-body');
+    if (!entry || !box) return;
+    const q = ($('input[data-list-filter]')?.value || '').trim().toLowerCase();
+    const sel = $('select[data-list-filter]')?.value || '';
+    const rows = entry.items.filter((it) => entry.opts.match(it, q, sel));
+    box.innerHTML = entry.opts.draw(rows)
+      + `<p class="hint small" role="status" aria-live="polite">Showing ${rows.length} of ${entry.items.length} ${esc(entry.opts.noun)}.</p>`;
+  }
+
+  const moduleCard = (m) => `
       <details class="module" open>
         <summary><span class="module-name">${linkTo(courseUrl(`/modules#context_module_${m.id}`), m.name, 'Open this module in Canvas')}</span> ${pill(m.published !== false)} <span class="count">${m.items_count ?? m.items?.length ?? 0} items</span></summary>
         ${m.items ? `<ul class="items">${m.items.map((it) => `
@@ -175,14 +209,40 @@
               : linkTo(canvasUrl(it.html_url), it.title)}
             ${it.published === false ? pill(false) : ''}</li>`).join('') || '<li class="empty">No items</li>'}</ul>`
           : `<button type="button" class="btn btn-small" data-load-items="${m.id}">Load items</button>`}
-      </details>`).join('')}</div>`);
+      </details>`;
+
+  function renderModules(mods) {
+    if (!mods.length) return guard('modules', '<p class="empty">This course has no modules.</p>');
+    listView('modules', mods, {
+      placeholder: 'Filter modules and their items…',
+      select: STATUS_SELECT,
+      noun: 'module(s)',
+      actions: `<button type="button" class="btn btn-small" data-export-content="docx">Export for Google Docs (.docx)</button>
+                <button type="button" class="btn btn-small" data-export-content="md">Markdown (.md)</button>`,
+      note: '<p class="hint small"><span class="badge badge-read">READ ONLY</span> Export gathers every page, assignment and discussion in module order. Upload the .docx to Google Drive and open it — Drive converts it to a Google Doc. Embedded media is marked in place, not reproduced.</p>',
+      // Searching item titles as well as module names is the useful behaviour:
+      // you usually remember the page, not which module it sits in.
+      match: (m, q, sel) => matchStatus(m.published !== false, sel)
+        && (has(m.name, q) || (m.items || []).some((it) => has(it.title, q))),
+      draw: (rows) => rows.length
+        ? `<div class="modules">${rows.map(moduleCard).join('')}</div>`
+        : '<p class="empty">No modules match that filter.</p>',
+    });
   }
 
   function renderPages(pages) {
-    guard('pages', table(['Title', 'Status', 'Updated', ''], pages.map((p) => `
-      <tr><td>${canvasEditLink(p.html_url, p.title)}${p.front_page ? ' <span class="pill">Front page</span>' : ''}</td><td>${pill(p.published)}</td>
-      <td>${fmtDate(p.updated_at)}</td><td><button type="button" class="btn btn-small" data-open-page="${esc(p.url)}">View</button></td></tr>`),
-    'No pages (or Pages is disabled in this course).') + '<div id="pagePreview"></div>');
+    listView('pages', pages, {
+      placeholder: 'Filter pages by title…',
+      select: STATUS_SELECT,
+      noun: 'page(s)',
+      // The preview sits OUTSIDE the list body so filtering doesn't close it.
+      after: '<div id="pagePreview"></div>',
+      match: (p, q, sel) => matchStatus(p.published, sel) && has(p.title, q),
+      draw: (rows) => table(['Title', 'Status', 'Updated', ''], rows.map((p) => `
+        <tr><td>${canvasEditLink(p.html_url, p.title)}${p.front_page ? ' <span class="pill">Front page</span>' : ''}</td><td>${pill(p.published)}</td>
+        <td>${fmtDate(p.updated_at)}</td><td><button type="button" class="btn btn-small" data-open-page="${esc(p.url)}">View</button></td></tr>`),
+      pages.length ? 'No pages match that filter.' : 'No pages (or Pages is disabled in this course).'),
+    });
     if (state.pendingPage) { const u = state.pendingPage; state.pendingPage = null; openPage(u); }
   }
 
@@ -214,9 +274,19 @@
   }
 
   function renderAssignments(list) {
-    guard('assignments', table(['Assignment', 'Due', 'Points', 'Status'], list.map((a) => `
-      <tr><td>${canvasEditLink(a.html_url, a.name)}</td><td>${a.due_at ? fmtDate(a.due_at) : '<span class="pill pill-warn">No due date</span>'}</td>
-      <td>${a.points_possible ?? '—'}</td><td>${pill(a.published)}</td></tr>`), 'No assignments.'));
+    listView('assignments', list, {
+      placeholder: 'Filter assignments by name…',
+      select: { label: 'Filter assignments', options: [{ value: '', label: 'All assignments' },
+        { value: 'published', label: 'Published' }, { value: 'unpublished', label: 'Unpublished' },
+        { value: 'nodue', label: 'No due date' }, { value: 'nopoints', label: '0 or no points' }] },
+      noun: 'assignment(s)',
+      match: (a, q, sel) => has(a.name, q) && (
+        sel === 'nodue' ? !a.due_at : sel === 'nopoints' ? !a.points_possible : matchStatus(a.published, sel)),
+      draw: (rows) => table(['Assignment', 'Due', 'Points', 'Status'], rows.map((a) => `
+        <tr><td>${canvasEditLink(a.html_url, a.name)}</td><td>${a.due_at ? fmtDate(a.due_at) : '<span class="pill pill-warn">No due date</span>'}</td>
+        <td>${a.points_possible ?? '—'}</td><td>${pill(a.published)}</td></tr>`),
+      list.length ? 'No assignments match that filter.' : 'No assignments.'),
+    });
   }
 
   // Canvas has no separate editor URL for the syllabus: the Syllabus page edits inline.
@@ -226,7 +296,7 @@
     guard('syllabus', `
       <div class="page-preview">
         <div class="page-preview-head"><h3>Syllabus</h3><span class="badge badge-read">READ ONLY preview</span>
-        ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Edit in Canvas</a>` : ''}</div>
+        ${link ? `<a class="btn btn-small" href="${esc(link)}" target="_blank" rel="noopener noreferrer" title="Edit in Canvas (opens in a new tab)">Edit in Canvas</a>` : ''}</div>
         ${body
           ? '<iframe title="Syllabus preview" sandbox="" referrerpolicy="no-referrer"></iframe><p class="hint small">Scripts are disabled in the preview. The link opens the Syllabus page, where Edit is inline.</p>'
           : '<p class="empty">This course has no syllabus content.</p>'}
@@ -238,25 +308,171 @@
   }
 
   function renderAnnouncements(list) {
-    guard('announcements', table(['Announcement', 'Posted', 'Status'], list.map((a) => `
-      <tr><td>${canvasEditLink(a.html_url, a.title)}</td><td>${fmtDate(a.posted_at || a.created_at)}</td><td>${pill(a.published)}</td></tr>`),
-    'No announcements.') + '<p class="hint small">Announcements come from the discussion_topics endpoint with only_announcements=true.</p>');
+    listView('announcements', list, {
+      placeholder: 'Filter announcements by title…',
+      select: STATUS_SELECT,
+      noun: 'announcement(s)',
+      note: '<p class="hint small">Announcements come from the discussion_topics endpoint with only_announcements=true.</p>',
+      match: (a, q, sel) => matchStatus(a.published, sel) && has(a.title, q),
+      draw: (rows) => table(['Announcement', 'Posted', 'Status'], rows.map((a) => `
+        <tr><td>${canvasEditLink(a.html_url, a.title)}</td><td>${fmtDate(a.posted_at || a.created_at)}</td><td>${pill(a.published)}</td></tr>`),
+      list.length ? 'No announcements match that filter.' : 'No announcements.'),
+    });
   }
 
   function renderDiscussions(list) {
-    guard('discussions', table(['Topic', 'Type', 'Posted', 'Status'], list.map((d) => `
-      <tr><td>${canvasEditLink(d.html_url, d.title)}</td><td>${esc(d.discussion_type || '—')}</td><td>${fmtDate(d.posted_at)}</td><td>${pill(d.published)}</td></tr>`), 'No discussions.'));
+    listView('discussions', list, {
+      placeholder: 'Filter discussions by title…',
+      select: STATUS_SELECT,
+      noun: 'discussion(s)',
+      match: (d, q, sel) => matchStatus(d.published, sel) && has(d.title, q),
+      draw: (rows) => table(['Topic', 'Type', 'Posted', 'Status'], rows.map((d) => `
+        <tr><td>${canvasEditLink(d.html_url, d.title)}</td><td>${esc(d.discussion_type || '—')}</td><td>${fmtDate(d.posted_at)}</td><td>${pill(d.published)}</td></tr>`),
+      list.length ? 'No discussions match that filter.' : 'No discussions.'),
+    });
   }
 
   function renderQuizzes(list) {
-    guard('quizzes', table(['Quiz', 'Type', 'Questions', 'Points', 'Status'], list.map((q) => `
-      <tr><td>${canvasEditLink(q.html_url, q.title)}</td><td>${esc(q.quiz_type || '—')}</td><td>${q.question_count ?? '—'}</td><td>${q.points_possible ?? '—'}</td><td>${pill(q.published)}</td></tr>`),
-    'No Classic Quizzes.') + '<p class="hint small">This endpoint lists Classic Quizzes only. New Quizzes show up under Assignments.</p>');
+    // Offer only the quiz types this course actually has.
+    const types = [...new Set((list || []).map((q) => q.quiz_type).filter(Boolean))].sort();
+    listView('quizzes', list, {
+      placeholder: 'Filter quizzes by title…',
+      select: { label: 'Filter quizzes by type', options: [{ value: '', label: 'All types' },
+        ...types.map((t) => ({ value: t, label: t }))] },
+      noun: 'quizzes',
+      note: '<p class="hint small">This endpoint lists Classic Quizzes only. New Quizzes show up under Assignments.</p>',
+      match: (qz, q, sel) => (!sel || qz.quiz_type === sel) && has(qz.title, q),
+      draw: (rows) => table(['Quiz', 'Type', 'Questions', 'Points', 'Status'], rows.map((qz) => `
+        <tr><td>${canvasEditLink(qz.html_url, qz.title)}</td><td>${esc(qz.quiz_type || '—')}</td><td>${qz.question_count ?? '—'}</td><td>${qz.points_possible ?? '—'}</td><td>${pill(qz.published)}</td></tr>`),
+      list.length ? 'No quizzes match that filter.' : 'No Classic Quizzes.'),
+    });
   }
 
+  // Extension beats content-type here: a designer looks for "the PDFs", and
+  // Canvas doesn't always return a useful content-type.
+  const fileExt = (f) => (/\.([A-Za-z0-9]+)$/.exec(f.display_name || '')?.[1] || '').toLowerCase();
+
   function renderFiles(list) {
-    guard('files', table(['File', 'Size', 'Updated'], list.map((f) => `
-      <tr><td>${linkTo(courseUrl(`/files/${f.id}`), f.display_name, 'Open in Canvas Files')}${f.locked ? ' <span class="pill pill-warn">Locked</span>' : ''}</td><td>${fmtSize(f.size)}</td><td>${fmtDate(f.updated_at)}</td></tr>`), 'No files.'));
+    state.files = list || [];
+    // Offer only the extensions this course actually has, with counts.
+    const counts = new Map();
+    for (const f of state.files) {
+      const e = fileExt(f);
+      if (e) counts.set(e, (counts.get(e) || 0) + 1);
+    }
+    const exts = [...counts.keys()].sort();
+    guard('files', `
+      <div class="filter-bar">
+        <input type="search" data-file-filter id="fileSearch" placeholder="Filter by file name…" aria-label="Filter files by name">
+        <select data-file-filter id="fileType" aria-label="Filter files by type">
+          <option value="">All types (${state.files.length})</option>
+          ${exts.map((e) => `<option value="${esc(e)}">.${esc(e)} (${counts.get(e)})</option>`).join('')}
+        </select>
+        <span class="bar-actions"><button type="button" class="btn btn-small" id="fileDownload" data-download-files disabled>Download selected</button></span>
+      </div>
+      <div id="filesBody"></div>`);
+    state.picked = new Set();
+    renderFileRows();
+  }
+
+  const visibleFiles = () => {
+    const q = ($('#fileSearch')?.value || '').trim().toLowerCase();
+    const type = $('#fileType')?.value || '';
+    return state.files.filter((f) =>
+      (!type || fileExt(f) === type) &&
+      (!q || (f.display_name || '').toLowerCase().includes(q)));
+  };
+
+  function renderFileRows() {
+    const box = $('#filesBody');
+    if (!box) return;
+    const rows = visibleFiles();
+    const allShown = rows.length > 0 && rows.every((f) => state.picked.has(f.id));
+    const head = [
+      `<input type="checkbox" data-file-all aria-label="Select all shown files"${allShown ? ' checked' : ''}>`,
+      'File', 'Size', 'Updated',
+    ];
+    box.innerHTML = table(head, rows.map((f) => `
+      <tr><td><input type="checkbox" data-file-pick value="${f.id}"${state.picked.has(f.id) ? ' checked' : ''} aria-label="Select ${esc(f.display_name)}"></td>
+      <td>${linkTo(courseUrl(`/files/${f.id}`), f.display_name, 'Open in Canvas Files')}${f.locked ? ' <span class="pill pill-warn">Locked</span>' : ''}</td><td>${fmtSize(f.size)}</td><td>${fmtDate(f.updated_at)}</td></tr>`),
+    state.files.length ? 'No files match that filter.' : 'No files.')
+      // aria-live so the count is announced when the filter or selection changes.
+      + (state.files.length ? `<p class="hint small" role="status" aria-live="polite">${fileStatus(rows)}</p>` : '');
+    syncDownloadButton();
+  }
+
+  function fileStatus(rows) {
+    const picked = state.files.filter((f) => state.picked.has(f.id));
+    const hidden = picked.length - rows.filter((f) => state.picked.has(f.id)).length;
+    const bytes = picked.reduce((t, f) => t + (f.size || 0), 0);
+    let s = `Showing ${rows.length} of ${state.files.length} file(s).`;
+    if (picked.length) {
+      s += ` ${picked.length} selected (${fmtSize(bytes)})`;
+      if (hidden) s += `, ${hidden} of them hidden by the filter`;
+      s += '.';
+      // Everything is held in memory before zipping, so say so before it bites.
+      if (bytes > 200 * 1048576) s += ' Large selection — the zip is built in memory.';
+    }
+    return s;
+  }
+
+  function syncDownloadButton() {
+    const btn = $('#fileDownload');
+    if (!btn) return;
+    const demo = state.client?.mode === 'demo';
+    const oldProxy = !demo && !state.canDownload;
+    btn.disabled = demo || oldProxy || state.picked.size === 0;
+    btn.title = oldProxy ? 'Stop the proxy (Ctrl+C) and run: node proxy/server.js' : '';
+    btn.textContent = demo ? 'Download needs the proxy'
+      : oldProxy ? 'Restart the proxy to download'
+      : state.picked.size ? `Download ${state.picked.size} selected (.zip)` : 'Download selected';
+  }
+
+  // Fetches each file through the proxy (Canvas blocks direct browser access),
+  // then zips them in the browser. READ ONLY.
+  async function downloadSelectedFiles(btn) {
+    const picked = state.files.filter((f) => state.picked.has(f.id));
+    if (!picked.length) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    const taken = new Set();
+    const entries = [];
+    const failed = [];
+    try {
+      let done = 0;
+      for (const f of picked) {
+        btn.textContent = `Fetching ${++done}/${picked.length}…`;
+        try {
+          const r = await fetch(`/download/${state.selected.id}/${f.id}`);
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            failed.push(`${f.display_name} — ${body.error || `HTTP ${r.status}`}`);
+            continue;
+          }
+          entries.push({
+            name: window.CCC_Zip.uniqueName(f.display_name || `file-${f.id}`, taken),
+            bytes: new Uint8Array(await r.arrayBuffer()),
+          });
+        } catch (err) {
+          failed.push(`${f.display_name} — ${err.message}`);
+        }
+      }
+      // A partial download should say what is missing, inside the archive itself.
+      if (failed.length) {
+        entries.push({ name: 'DOWNLOAD-ERRORS.txt',
+          text: `These files could not be downloaded:\n\n${failed.join('\n')}\n` });
+      }
+      if (entries.length === (failed.length ? 1 : 0)) {
+        $('#filesBody').insertAdjacentHTML('afterbegin',
+          `<div class="error-box"><strong>Nothing downloaded.</strong> ${esc(failed[0] || '')}</div>`);
+        return;
+      }
+      download(`course-files_${state.selected.id}_v1.zip`, window.CCC_Zip.makeZip(entries));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+      syncDownloadButton();
+    }
   }
 
   // ---------------- Quick review ----------------
@@ -295,13 +511,22 @@
 
     const unavailable = [['modules', mods], ['pages', pages], ['assignments', asg], ['discussions', disc], ['quizzes', quiz]].filter(([, v]) => v == null).map(([k]) => k);
 
-    guard('review', `
-      <div class="review-head">
-        <p><strong>${findings.length}</strong> potential issue${findings.length === 1 ? '' : 's'} found. <span class="badge badge-read">READ ONLY</span> These are prompts for your judgment; some may be intentional.</p>
-        ${findings.length ? '<button type="button" class="btn btn-small" data-export-review>Download report</button>' : ''}
-      </div>
-      ${unavailable.length ? `<p class="hint small">Couldn't read: ${unavailable.join(', ')} (permission or feature disabled).</p>` : ''}
-      ${table(['Area', 'Issue', 'Item'], findings.map((f) => `<tr><td>${esc(f.area)}</td><td>${esc(f.issue)}</td><td>${linkTo(f.url, f.item)}</td></tr>`), 'Nothing flagged. Nice.')}`);
+    // Offer only the areas that actually produced findings.
+    const areas = [...new Set(findings.map((f) => f.area))].sort();
+    listView('review', findings, {
+      placeholder: 'Filter findings by item, issue or area…',
+      select: { label: 'Filter findings by area', options: [{ value: '', label: `All areas (${findings.length})` },
+        ...areas.map((a) => ({ value: a, label: `${a} (${findings.filter((f) => f.area === a).length})` }))] },
+      noun: 'finding(s)',
+      actions: findings.length ? '<button type="button" class="btn btn-small" data-export-review>Download report</button>' : '',
+      note: `<p class="hint small"><span class="badge badge-read">READ ONLY</span> These are prompts for your judgment; some may be intentional.${
+        unavailable.length ? ` Couldn't read: ${esc(unavailable.join(', '))} (permission or feature disabled).` : ''}</p>`,
+      match: (f, q, sel) => (!sel || f.area === sel)
+        && (!q || has(f.item, q) || has(f.issue, q) || has(f.area, q)),
+      draw: (rows) => table(['Area', 'Issue', 'Item'], rows.map((f) => `
+        <tr><td>${esc(f.area)}</td><td>${esc(f.issue)}</td><td>${linkTo(f.url, f.item)}</td></tr>`),
+      findings.length ? 'No findings match that filter.' : 'Nothing flagged. Nice.'),
+    });
     state.lastReview = findings;
   }
 
@@ -452,12 +677,30 @@
     $('#courseFilter').addEventListener('change', renderCourses);
     $('#courses').addEventListener('click', (e) => { const b = e.target.closest('.course-btn'); if (b) selectCourse(b.dataset.id); });
     $('#subtabs').addEventListener('click', (e) => { const b = e.target.closest('button[data-view]'); if (b && state.selected) showView(b.dataset.view); });
+    const onFileControl = (e) => {
+      const t = e.target;
+      if (t.closest('[data-list-filter]')) return renderListRows(state.view);
+      if (t.closest('[data-file-filter]')) return renderFileRows();
+      if (t.matches('[data-file-pick]')) {
+        const id = Number(t.value);
+        if (t.checked) state.picked.add(id); else state.picked.delete(id);
+        // Re-render rather than patch: the select-all box and counts both move.
+        return renderFileRows();
+      }
+      if (t.matches('[data-file-all]')) {
+        for (const f of visibleFiles()) { if (t.checked) state.picked.add(f.id); else state.picked.delete(f.id); }
+        return renderFileRows();
+      }
+    };
+    $('#viewBody').addEventListener('input', onFileControl);
+    $('#viewBody').addEventListener('change', onFileControl);
     $('#viewBody').addEventListener('click', (e) => {
       const t = e.target;
       if (t.closest('[data-open-page]')) openPage(t.closest('[data-open-page]').dataset.openPage);
       else if (t.closest('[data-close-preview]')) document.getElementById('pagePreview').innerHTML = '';
       else if (t.closest('[data-export-review]')) exportReview();
       else if (t.closest('[data-export-content]')) { const b = t.closest('[data-export-content]'); exportModuleContent(b, b.dataset.exportContent); }
+      else if (t.closest('[data-download-files]')) downloadSelectedFiles(t.closest('[data-download-files]'));
       else if (t.closest('[data-load-items]')) loadModuleItems(t.closest('[data-load-items]').dataset.loadItems, t.closest('[data-load-items]'));
     });
   }

@@ -17,57 +17,9 @@
 (function () {
   const enc = new TextEncoder();
 
-  // ---------------- minimal ZIP (store only, no compression) ----------------
-  const CRC_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-      t[i] = c >>> 0;
-    }
-    return t;
-  })();
-
-  function crc32(bytes) {
-    let c = 0xffffffff;
-    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-  }
-
-  function zip(files) {
-    const chunks = [];
-    const central = [];
-    let offset = 0;
-    const u16 = (n) => [n & 0xff, (n >>> 8) & 0xff];
-    const u32 = (n) => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
-
-    for (const { name, text } of files) {
-      const nameBytes = enc.encode(name);
-      const data = enc.encode(text);
-      const crc = crc32(data);
-      // Local file header. Method 0 = stored; fixed DOS timestamp for reproducibility.
-      const local = [0x50, 0x4b, 0x03, 0x04, ...u16(20), ...u16(0), ...u16(0),
-        ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length),
-        ...u16(nameBytes.length), ...u16(0)];
-      chunks.push(new Uint8Array(local), nameBytes, data);
-      central.push({ name: nameBytes, crc, size: data.length, offset });
-      offset += local.length + nameBytes.length + data.length;
-    }
-
-    const dir = [];
-    for (const e of central) {
-      dir.push(...[0x50, 0x4b, 0x01, 0x02, ...u16(20), ...u16(20), ...u16(0), ...u16(0),
-        ...u16(0), ...u16(0x21), ...u32(e.crc), ...u32(e.size), ...u32(e.size),
-        ...u16(e.name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0),
-        ...u32(e.offset)], ...e.name);
-    }
-    const dirBytes = new Uint8Array(dir);
-    const eocd = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...u16(0), ...u16(0),
-      ...u16(central.length), ...u16(central.length), ...u32(dirBytes.length), ...u32(offset), ...u16(0)]);
-    return new Blob([...chunks, dirBytes, eocd], {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-  }
+  // ZIP writing lives in zip.js, shared with the file-download feature.
+  const zip = (files) => window.CCC_Zip.makeZip(files,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 
   // ---------------- XML helpers ----------------
   const x = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -84,17 +36,21 @@
   function inlineRuns(text, rels) {
     const out = [];
     // Order matters: links first, then code, bold, italic.
-    const re = /\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+    const re = /!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*/g;
     let last = 0, m;
     const plain = (s) => { if (s) out.push(run(s.replace(/\\([\\`*_[\]])/g, '$1'))); };
     while ((m = re.exec(text))) {
       plain(text.slice(last, m.index));
       if (m[1] !== undefined) {
+        // Images are not embedded in the .docx; link to them so the reviewer can look.
         const id = rels.add(m[2]);
-        out.push(`<w:hyperlink r:id="${id}">${run(m[1], { link: true })}</w:hyperlink>`);
-      } else if (m[3] !== undefined) out.push(run(m[3], { code: true }));
-      else if (m[4] !== undefined) out.push(run(m[4], { b: true }));
-      else out.push(run(m[5], { i: true }));
+        out.push(`<w:hyperlink r:id="${id}">${run(`[Image${m[1] ? `: ${m[1]}` : ''}]`, { link: true, i: true })}</w:hyperlink>`);
+      } else if (m[3] !== undefined) {
+        const id = rels.add(m[4]);
+        out.push(`<w:hyperlink r:id="${id}">${run(m[3], { link: true })}</w:hyperlink>`);
+      } else if (m[5] !== undefined) out.push(run(m[5], { code: true }));
+      else if (m[6] !== undefined) out.push(run(m[6], { b: true }));
+      else out.push(run(m[7], { i: true }));
       last = re.lastIndex;
     }
     plain(text.slice(last));

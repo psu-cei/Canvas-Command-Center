@@ -151,12 +151,15 @@ main { max-width: 1240px; margin: 0 auto; padding: 0 28px 72px; }
 .qa dd { margin: .2em 0 0; color: var(--ink-2); }
 
 /* Buttons: same shape as the reference .button */
-.btn { border: 2px solid var(--accent); background: var(--accent); color: var(--accent-ink); padding: 10px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+.btn { border: 2px solid var(--accent); background: var(--accent); color: var(--accent-ink); padding: 10px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn:disabled { opacity: .6; cursor: default; }
 .btn-ghost { background: var(--surface); color: var(--accent); }
 .btn-ghost:hover { background: var(--accent-soft); color: var(--accent-hover); }
 .btn-small { padding: 5px 12px; font-size: .85rem; border-radius: 7px; }
+/* Links styled as buttons: <button> gets these from the UA stylesheet, <a> doesn't. */
+a.btn { display: inline-block; text-decoration: none; line-height: 1.4; }
+a.btn:hover { color: var(--accent-ink); }
 .linkish { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 3px; text-align: left; font-weight: 700; }
 
 /* ---------- Diagram ---------- */
@@ -229,8 +232,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 0 28px 72px; }
 .dash { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 22px; align-items: start; }
 .course-list { padding: 16px; position: sticky; top: 104px; max-height: calc(100vh - 124px); display: flex; flex-direction: column; }
 .course-tools { display: flex; gap: 6px; margin-bottom: 10px; }
-.course-tools input, .course-tools select { padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); min-width: 0; }
-.course-tools input { flex: 1; }
+.course-tools input, .course-tools select, .filter-bar input, .filter-bar select { padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); min-width: 0; }
+.course-tools input, .filter-bar input { flex: 1; }
+.filter-bar { display: flex; gap: 6px; margin-bottom: 12px; }
 .courses { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
 .course-btn { width: 100%; text-align: left; border: 0; background: none; padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .course-btn:hover { background: var(--surface-2); }
@@ -276,7 +280,11 @@ tbody tr:hover { background: var(--surface-2); }
 .page-preview iframe { width: 100%; height: 420px; border: 0; background: #fff; display: block; }
 .page-preview .hint { padding: 0 14px 10px; margin: 8px 0 0; }
 .review-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.export-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.export-actions, .bar-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+/* Wrap rather than crush the search box: flex:1 alone lets it shrink to nothing
+   once the action buttons need the room. */
+.filter-bar { align-items: center; flex-wrap: wrap; }
+.filter-bar input { flex: 1 1 200px; min-width: 160px; }
 
 .prompt-list { display: grid; gap: 10px; }
 .roadmap li { margin: .6em 0; }

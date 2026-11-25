@@ -23,6 +23,19 @@
     return Boolean(base) && src.startsWith(base);
   }
 
+  // Canvas's editor wraps iframes in <p>, so embeds show up on the inline path
+  // as often as the block one. Both must handle them or the embed is lost.
+  const EMBED = /^(IFRAME|VIDEO|AUDIO|EMBED|OBJECT)$/;
+  function embedNote(node) {
+    const title = (node.getAttribute('title') || '').trim();
+    const raw = node.getAttribute('src') || node.getAttribute('data') || '';
+    // Player URLs run to hundreds of characters of query string. Keep enough to
+    // identify the source, not the whole thing.
+    const src = raw.length > 90 ? `${raw.slice(0, 90)}…` : raw;
+    const kind = node.tagName === 'IFRAME' ? 'Embedded media' : `Embedded ${node.tagName.toLowerCase()}`;
+    return `**[${kind}${title ? `: ${escMd(title)}` : ''} — not viewable outside Canvas]**${src ? ` \`${src}\`` : ''}`;
+  }
+
   // Inline content: everything that belongs on one line.
   function inline(node, ctx) {
     if (node.nodeType === 3) return escMd(tidy(node.nodeValue));
@@ -30,6 +43,8 @@
     const kids = () => [...node.childNodes].map((n) => inline(n, ctx)).join('');
     switch (node.tagName) {
       case 'BR': return '  \n';
+      case 'IFRAME': case 'VIDEO': case 'AUDIO': case 'EMBED': case 'OBJECT':
+        return embedNote(node);
       case 'STRONG': case 'B': { const t = kids().trim(); return t ? `**${t}**` : ''; }
       case 'EM': case 'I': { const t = kids().trim(); return t ? `*${t}*` : ''; }
       case 'CODE': return `\`${node.textContent.trim()}\``;
@@ -92,17 +107,19 @@
         const level = Math.min(6, Number(node.tagName[1]) + 2);
         return `${'#'.repeat(level)} ${inline(node, ctx).trim()}`;
       }
-      case 'P': { const t = inline(node, ctx).trim(); return t || ''; }
+      case 'P': {
+        const only = node.children.length === 1 && !node.textContent.trim() && EMBED.test(node.children[0].tagName);
+        if (only) return `> ${embedNote(node.children[0])}`;
+        const t = inline(node, ctx).trim();
+        return t || '';
+      }
       case 'UL': case 'OL': return listBlock(node, ctx, 0);
       case 'TABLE': return tableBlock(node, ctx);
       case 'BLOCKQUOTE': return inline(node, ctx).trim().split('\n').map((l) => `> ${l}`).join('\n');
       case 'PRE': return '```\n' + node.textContent.replace(/\s+$/, '') + '\n```';
       case 'HR': return '---';
-      case 'IFRAME': {
-        const title = (node.getAttribute('title') || '').trim();
-        const src = node.getAttribute('src') || '';
-        return `> **[Embedded media${title ? `: ${escMd(title)}` : ''} — not viewable outside Canvas]**${src ? `\n> \`${src}\`` : ''}`;
-      }
+      case 'IFRAME': case 'VIDEO': case 'AUDIO': case 'EMBED': case 'OBJECT':
+        return `> ${embedNote(node)}`;
       case 'SCRIPT': case 'STYLE': return '';
       default: {
         // A container: recurse if it holds blocks, otherwise treat it as inline.
